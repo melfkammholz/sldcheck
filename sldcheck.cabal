@@ -1,6 +1,6 @@
 cabal-version:      3.4
 name:               sldcheck
-version:            0.2.0.0
+version:            0.3.0.0
 synopsis:           A checker for SLD trees of Prolog programs
 description:
   Reads an SLD tree written in a small text notation and checks it against a
@@ -43,7 +43,9 @@ library
     SLDCheck.Expand
     SLDCheck.Diagnostic
     SLDCheck.Check
+    SLDCheck.Json
     SLDCheck.Run
+    SLDCheck.TreeJson
     SLDCheck.Version
 
 executable sldcheck

@@ -6,6 +6,7 @@ module SLDCheck.Run
   ( Input(..)
   , Job(..)
   , analyse
+  , readTree
   , fromParseError
   ) where
 
@@ -17,9 +18,10 @@ import Text.Parsec.Error (errorMessages, showErrorMessages)
 
 import SLDCheck.Check
 import SLDCheck.Diagnostic
+import SLDCheck.Expand
 import SLDCheck.Notation
 import SLDCheck.Prolog
-import SLDCheck.Tree (Pos(..))
+import SLDCheck.Tree (Forest, Pos(..))
 
 -- | A file as it was read, with the name the user gave it.
 data Input = Input { inputName :: FilePath, inputText :: String }
@@ -52,6 +54,25 @@ analyse job = completeEnds (inputText tree) (maybe "" inputText mprog) result
       Just p  -> case parseProgramOps (inputName p) (inputText p) of
         Left e  -> Left (fromParseError InProgram (inputText p) e)
         Right r -> Right (Just r)
+
+-- | Read the tree (and the program, for its operators), and replace the
+--   references between trees.  Syntax errors come back as diagnostics, with
+--   the problems the references have, but without a forest.
+readTree :: Maybe Input -> Input -> ([Diagnostic], Maybe (OpTable, Forest))
+readTree mprog tree = completeAll $ case parseProgram' of
+  Left d   -> ([d], Nothing)
+  Right mp ->
+    let ops = maybe defaultOps snd mp
+    in case parseForestWith ops (inputName tree) (inputText tree) of
+         Left e       -> ([fromParseError InTree (inputText tree) e], Nothing)
+         Right forest -> let (expanded, ds) = expandForest forest in (ds, Just (ops, expanded))
+  where
+    parseProgram' = case mprog of
+      Nothing -> Right Nothing
+      Just p  -> case parseProgramOps (inputName p) (inputText p) of
+        Left e  -> Left (fromParseError InProgram (inputText p) e)
+        Right r -> Right (Just r)
+    completeAll (ds, r) = (completeEnds (inputText tree) (maybe "" inputText mprog) ds, r)
 
 -- | A syntax error as a diagnostic: where reading stopped (or the place the
 --   parser says is meant), up to the end of the token there, and what was

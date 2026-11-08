@@ -12,13 +12,13 @@ module SLDCheck.Diagnostic
   , isSyntaxError
   , renderText
   , renderJson
+  , diagnosticsValue
   ) where
 
-import Data.Char (ord)
 import Data.List (intercalate, sortOn)
 import Data.Maybe (fromMaybe)
-import Numeric (showHex)
 
+import SLDCheck.Json
 import SLDCheck.Tree (Pos(..))
 import SLDCheck.Version (version)
 
@@ -87,23 +87,17 @@ renderText fs ds = unlines (map one ds ++ [summary])
 --   @severity@, @code@, @file@ (as the user gave it), @line@, @column@,
 --   @endLine@, @endColumn@ (exclusive) and @message@.  Lines and columns start at 1.
 renderJson :: Files -> [Diagnostic] -> String
-renderJson fs ds = "{\"version\":" ++ str version ++ ",\"diagnostics\":["
-  ++ intercalate ",\n  " (map one ds) ++ "]}\n"
+renderJson fs ds = render (Obj [("version", Str version), ("diagnostics", diagnosticsValue fs ds)]) ++ "\n"
+
+-- | The diagnostics as a JSON array.
+diagnosticsValue :: Files -> [Diagnostic] -> Value
+diagnosticsValue fs ds = Arr (map one ds)
   where
     one d = let Pos l c   = dPos d
                 Pos l' c' = fromMaybe (Pos l (c + 1)) (dEnd d)
-            in "{\"severity\":" ++ str (severityWord (dSeverity d))
-               ++ ",\"code\":" ++ str (dCode d)
-               ++ ",\"file\":" ++ str (fileOf fs (dRole d))
-               ++ ",\"line\":" ++ show l ++ ",\"column\":" ++ show c
-               ++ ",\"endLine\":" ++ show l' ++ ",\"endColumn\":" ++ show c'
-               ++ ",\"message\":" ++ str (dMessage d) ++ "}"
-    str s = "\"" ++ concatMap esc s ++ "\""
-    esc c = case c of
-      '"'  -> "\\\""
-      '\\' -> "\\\\"
-      '\n' -> "\\n"
-      '\t' -> "\\t"
-      _ | ord c < 0x20 -> "\\u" ++ replicate (4 - length h) '0' ++ h
-        | otherwise    -> [c]
-      where h = showHex (ord c) ""
+            in Obj [ ("severity", Str (severityWord (dSeverity d)))
+                   , ("code", Str (dCode d))
+                   , ("file", Str (fileOf fs (dRole d)))
+                   , ("line", Num l), ("column", Num c)
+                   , ("endLine", Num l'), ("endColumn", Num c')
+                   , ("message", Str (dMessage d)) ]

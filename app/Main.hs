@@ -10,13 +10,16 @@ import System.Exit
 import System.IO
 
 import SLDCheck.Diagnostic
+import SLDCheck.Prolog (defaultOps)
 import SLDCheck.Run
+import SLDCheck.TreeJson
 import SLDCheck.Version (version)
 
 usage :: String
 usage = unlines
   [ "usage: sldcheck [--json] [--require-answers] TREE.sld PROGRAM.pl"
   , "       sldcheck --syntax [--json] TREE.sld [PROGRAM.pl]"
+  , "       sldcheck --tree TREE.sld [PROGRAM.pl]"
   , "       sldcheck --version"
   , ""
   , "  Checks an SLD tree against a Prolog program and reports every problem found."
@@ -26,6 +29,7 @@ usage = unlines
   , "  --require-answers  a proven node without its answer is an error, not a warning"
   , "  --syntax           only read the tree, which is much quicker; the program is only"
   , "                     needed if it declares operators the tree uses"
+  , "  --tree             print the tree as JSON, for drawing it (see README.md)"
   , "  --version          print the version"
   , ""
   , "  Exit status: 0 no errors, 1 the tree has errors, 2 bad input (a syntax error"
@@ -36,12 +40,13 @@ data Opts = Opts
   , oJson    :: Bool
   , oRequire :: Bool
   , oSyntax  :: Bool
+  , oTree    :: Bool
   }
 
 data Command = Version | Help | Run Opts
 
 parseArgs :: [String] -> Either String Command
-parseArgs = go (Opts [] False False False)
+parseArgs = go (Opts [] False False False False)
   where
     go o as = case as of
       []                         -> Right (Run o { oFiles = reverse (oFiles o) })
@@ -51,6 +56,7 @@ parseArgs = go (Opts [] False False False)
       "--json" : rest            -> go o { oJson = True } rest
       "--require-answers" : rest -> go o { oRequire = True } rest
       "--syntax" : rest          -> go o { oSyntax = True } rest
+      "--tree" : rest            -> go o { oTree = True } rest
       a : _ | take 1 a == "-" && a /= "-" -> Left ("unknown option " ++ a)
       a : rest                   -> go o { oFiles = a : oFiles o } rest
 
@@ -66,7 +72,7 @@ main = do
     Right (Run o)  -> run o
 
 run :: Opts -> IO ()
-run o = case (oSyntax o, oFiles o) of
+run o = case (oSyntax o || oTree o, oFiles o) of
   (False, [t, p]) -> go (Just p) t
   (True,  [t])    -> go Nothing t
   (True,  [t, p]) -> go (Just p) t
@@ -78,7 +84,9 @@ run o = case (oSyntax o, oFiles o) of
       prog <- traverse (\p -> Input p <$> readUtf8 p) mprog
       treeText <- if tree == "-" then hSetEncoding stdin utf8 >> getContents else readUtf8 tree
       let treeIn = Input (if tree == "-" then "<stdin>" else tree) treeText
-          job = case (oSyntax o, prog) of
+      if oTree o then showTree prog treeIn else check prog treeIn
+    check prog treeIn = do
+      let job = case (oSyntax o, prog) of
             (False, Just p) -> CheckTree (oRequire o) p treeIn
             (_, p)          -> SyntaxOnly p treeIn
           ds = analyse job
@@ -86,6 +94,11 @@ run o = case (oSyntax o, oFiles o) of
       putStr (if oJson o then renderJson files ds else renderText files ds)
       exitWith $ if any isSyntaxError ds then ExitFailure 2
                  else if hasErrors ds then ExitFailure 1 else ExitSuccess
+    showTree prog treeIn = do
+      let (ds, result) = readTree prog treeIn
+          files = Files (inputName treeIn) (inputName <$> prog)
+      putStr (renderTree files (maybe defaultOps fst result) (snd <$> result) ds)
+      exitWith (if any isSyntaxError ds then ExitFailure 2 else ExitSuccess)
 
 -- | Text files are UTF-8, whatever the locale says.
 readUtf8 :: FilePath -> IO String

@@ -64,12 +64,14 @@ cut-broken.sld: 1 error, 0 warnings, 0 notes
 ```
 sldcheck [--json] [--require-answers] TREE.sld PROGRAM.pl
 sldcheck --syntax [--json] TREE.sld [PROGRAM.pl]
+sldcheck --tree TREE.sld [PROGRAM.pl]
 sldcheck --version
 ```
 
 - `TREE.sld` can be `-` for standard input.
 - `--json` prints the diagnostics as a JSON object (see below).
 - `--require-answers` makes a proven node without its answer an error instead of a warning.
+- `--tree` prints the tree as JSON, for tools that draw it (see below). It checks nothing, and has no use for the program unless that declares operators.
 - `--syntax` only reads the tree, without checking it: much quicker, for an editor that wants to show syntax errors while a tree is being written. The program is only needed if it declares operators the tree uses.
 - Exit status: 0 no errors (warnings may be printed), 1 the tree has errors, 2 bad input. A syntax error in the tree or in the program is reported like any other problem (codes `S001` and `S002`), also in JSON, and gives status 2.
 
@@ -83,6 +85,32 @@ The program is read with its `op/3` directives, and the tree with the resulting 
 ```
 
 `severity` is `error`, `warning` or `info`. `file` is the file as it was given on the command line, which tells a problem in the tree from one in the program. Lines and columns start at 1, and the end is exclusive. A problem is marked from where it starts to the end of the code on that line, or to the end of the token for a syntax error. A syntax error is located where the problem is: a brace that is never closed is reported at the brace, and a missing end dot right after the last token of the goal or rule.
+
+### The tree as JSON
+
+`sldcheck --tree TREE.sld` prints
+
+```json
+{"version":"0.3.0.0","tree":Node,"negations":[Node],"diagnostics":[]}
+```
+
+`tree` is the query's tree, with every `@name` reference replaced by the tree it names, as if it had been written in one piece. `negations` are the other trees, the ones negations use, each with its `name`. For a syntax error `tree` is `null` and `diagnostics` has the error (exit status 2); the problems that references can have (an unknown name, a tree that contains itself) are there too, and the step keeps its `ref`.
+
+```
+Node = { "line", "column", "goal": "member(X, [1, 2]), Y is X + 1", "name": "c" | null,
+         "answer": [{"var": "X", "term": "1"}] | null, "steps": [Step] }
+Step = { "line", "column", "kind", "child": Node | null, "ref"?: "name", ... }
+```
+
+| `kind` | also has |
+|---|---|
+| `resolve` | `rule` (the renamed clause, without the end dot), `subst` |
+| `builtin` | `subst` |
+| `negation`, `negation-fails` | `tree`: the name of the tree of the negated goal |
+| `pruned` | `predicate` (`member/2`), `clause`, `by`: the name of the cut node |
+| `cut`, `no-rule`, `builtin-fails`, `fails` | nothing |
+
+`subst` and `answer` are lists of `{"var", "term"}`. Terms are printed as Prolog, with the variables as they were written, so that a diagram shows what the student wrote. Lines and columns start at 1 and are where the node or step starts, which is also where the checker reports its problems about it.
 
 ## How it checks
 

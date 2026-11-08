@@ -5,7 +5,7 @@ module Main (main) where
 
 import Control.Exception (finally)
 import Control.Monad
-import Data.List (isInfixOf, isSuffixOf, nub, sort)
+import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub, sort, tails)
 import System.Directory
 import System.Exit
 import System.FilePath ((</>))
@@ -19,6 +19,7 @@ import SLDCheck.Notation
 import SLDCheck.Prolog
 import SLDCheck.Run
 import SLDCheck.Solve
+import SLDCheck.TreeJson
 import SLDCheck.Tree (Pos(..))
 import SLDCheck.Version (version)
 
@@ -394,6 +395,53 @@ syntaxCases =
            []   -> Nothing
            miss -> Just (show miss ++ " missing from " ++ out)
 
+-- | @--tree@: the tree as JSON.
+treeOutput :: String -> String -> String -> String
+treeOutput name prog tree =
+  let (ds, result) = readTree (if null prog then Nothing else Just (Input "p.pl" prog)) (Input name tree)
+  in renderTree (Files name Nothing) (maybe defaultOps fst result) (snd <$> result) ds
+
+count :: String -> String -> Int
+count needle = length . filter (needle `isPrefixOf`) . tails
+
+treeCases :: IO [Maybe String]
+treeCases = do
+  member  <- readFile "examples/member.sld"
+  memberP <- readFile "examples/member.pl"
+  nested  <- readFile "examples/ancestor.sld"
+  split   <- readFile "examples/ancestor-split.sld"
+  ancP    <- readFile "examples/ancestor.pl"
+  neg     <- readFile "examples/negation.sld"
+  negP    <- readFile "examples/negation.pl"
+  cut     <- readFile "examples/cut.sld"
+  cutP    <- readFile "examples/cut.pl"
+  let has what out needle = if needle `isInfixOf` out then Nothing else Just (what ++ ": " ++ show needle ++ " is not in " ++ out)
+      m = treeOutput "member.sld" memberP member
+      n = treeOutput "negation.sld" negP neg
+      c = treeOutput "cut.sld" cutP cut
+      nestedOut = treeOutput "ancestor.sld" ancP nested
+      splitOut  = treeOutput "ancestor-split.sld" ancP split
+  pure $
+    [ has "rule" m "\"kind\":\"resolve\",\"rule\":\"member(X1, [X1|_1])\""
+    , has "built-in" m "\"kind\":\"builtin\",\"subst\":[{\"var\":\"Y\",\"term\":\"2\"}]"
+    , has "answer" m "\"answer\":[{\"var\":\"X\",\"term\":\"1\"},{\"var\":\"Y\",\"term\":\"2\"}]"
+    , has "goal" m "\"goal\":\"member(X, [1, 2]), Y is X + 1\""
+    , has "position" m "\"line\":3,\"column\":3,\"kind\":\"resolve\""
+    , has "no rule" m "\"kind\":\"no-rule\""
+    , has "negation" n "\"kind\":\"negation-fails\",\"tree\":\"t1\""
+    , has "negation trees" n "\"negations\":[{"
+    , has "name of a negation tree" n "\"name\":\"t2\""
+    , has "pruned" c "\"kind\":\"pruned\",\"predicate\":\"parent/2\",\"clause\":2,\"by\":\"c\""
+    , has "cut" c "\"kind\":\"cut\""
+    , has "no diagnostics" m "\"diagnostics\":[]"
+    , if count "\"goal\":" nestedOut == count "\"goal\":" splitOut && count "\"goal\":" splitOut == 15 && "\"negations\":[]" `isInfixOf` splitOut
+        then Nothing else Just "a tree split into parts has the same nodes as the nested one"
+    , has "a syntax error" (treeOutput "t.sld" "" "?- p(X)\n") "\"tree\":null"
+    , has "its diagnostic" (treeOutput "t.sld" "" "?- p(X)\n") "\"code\":\"S001\""
+    , has "a reference to nowhere" (treeOutput "t.sld" "" "?- p.\n  | q.\n  @nowhere\n") "\"code\":\"E002\""
+    , has "and the step keeps it" (treeOutput "t.sld" "" "?- p.\n  | q.\n  @nowhere\n") "\"ref\":\"nowhere\""
+    ]
+
 -- | The version of the program is the version of the package.
 versionMatches :: IO (Maybe String)
 versionMatches = do
@@ -487,6 +535,10 @@ main = do
   let syntaxFailures = [name ++ ": " ++ m | (name, Just m) <- syntaxCases]
   mapM_ putStrLn syntaxFailures
   putStrLn (show (length syntaxCases - length syntaxFailures) ++ "/" ++ show (length syntaxCases) ++ " syntax error cases are located right")
+  treeProblems <- treeCases
+  let treeFailures = [m | Just m <- treeProblems]
+  mapM_ putStrLn treeFailures
+  putStrLn (show (length treeProblems - length treeFailures) ++ "/" ++ show (length treeProblems) ++ " checks of the tree output pass")
   versionProblem <- versionMatches
   mapM_ putStrLn versionProblem
 
@@ -503,4 +555,4 @@ main = do
       mapM_ putStrLn fs
       putStrLn (show (length solverCases - length fs) ++ "/" ++ show (length solverCases) ++ " solver cases agree with swipl")
       pure fs
-  when (not (null failures && null exampleFailures && null solverFailures) || broken /= Nothing || not (null syntaxFailures) || versionProblem /= Nothing) exitFailure
+  when (not (null failures && null exampleFailures && null solverFailures) || broken /= Nothing || not (null syntaxFailures) || not (null treeFailures) || versionProblem /= Nothing) exitFailure
