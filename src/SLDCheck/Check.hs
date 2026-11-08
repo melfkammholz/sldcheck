@@ -126,7 +126,7 @@ instance Monoid Out where mempty = Out [] [] []
 type W = Writer Out
 
 diag :: Severity -> String -> Pos -> String -> W ()
-diag sev code pos msg = tell (Out [Diagnostic sev code pos msg] [] [])
+diag sev code pos msg = tell (Out [diagnostic sev code pos msg] [] [])
 
 err, warn :: String -> Pos -> String -> W ()
 err  = diag Error
@@ -200,11 +200,11 @@ checkForest opts forest0 = sortDiagnostics (nub (expansionProblems ++ oDiags out
     final = if hasErrors (oDiags out) then [] else consistency
     consistency
       | not complete =
-          [Diagnostic Info "I001" (nodePos root)
+          [diagnostic Info "I001" (nodePos root)
             "the reference solver stopped early (step limit, error or unsupported built-in), so the answers were not cross-checked"]
       | null extra && null absent = []
       | otherwise =
-          [Diagnostic Error "E099" (nodePos root)
+          [diagnostic Error "E099" (nodePos root)
             ("the checker found no problems, but the tree's answers differ from the reference solver's (tree only: "
              ++ describeAnswers extra ++ "; solver only: " ++ describeAnswers absent ++ "). This is a bug in the checker.")]
       where
@@ -320,7 +320,7 @@ unifierReport pos a b bindings = (dups ++ trivial ++ extra ++ main, valid)
     bs       = [(v, toCore t) | (v, t) <- bindings]
     theta    = M.fromList bs
     names    = map fst bs
-    d sev c m = Diagnostic sev c pos m
+    d sev c m = diagnostic sev c pos m
     dups     = [ d Error "E018" ("the variable " ++ v ++ " is bound more than once in the substitution")
                | v <- nub (names \\ nub names) ]
     trivial  = [ d Warning "W005" ("the binding " ++ v ++ " |-> " ++ v ++ " does nothing")

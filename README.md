@@ -62,14 +62,27 @@ cut-broken.sld: 1 error, 0 warnings, 0 notes
 ## Usage
 
 ```
-sldcheck TREE.sld PROGRAM.pl [--json] [--require-answers]
+sldcheck [--json] [--require-answers] TREE.sld PROGRAM.pl
+sldcheck --syntax [--json] TREE.sld [PROGRAM.pl]
+sldcheck --version
 ```
 
-- `--json` prints the diagnostics as a JSON array (`severity`, `code`, `line`, `column`, `message`).
+- `TREE.sld` can be `-` for standard input.
+- `--json` prints the diagnostics as a JSON object (see below).
 - `--require-answers` makes a proven node without its answer an error instead of a warning.
-- Exit status: 0 no errors (warnings may be printed), 1 the tree has errors, 2 bad input, including syntax errors.
+- `--syntax` only reads the tree, without checking it: much quicker, for an editor that wants to show syntax errors while a tree is being written. The program is only needed if it declares operators the tree uses.
+- Exit status: 0 no errors (warnings may be printed), 1 the tree has errors, 2 bad input. A syntax error in the tree or in the program is reported like any other problem (codes `S001` and `S002`), also in JSON, and gives status 2.
 
-The program is read with its `op/3` directives, and the tree with the resulting operators.
+The program is read with its `op/3` directives, and the tree with the resulting operators. Files are read as UTF-8 whatever the locale is.
+
+### JSON
+
+```json
+{"version":"0.2.0.0","diagnostics":[
+  {"severity":"error","code":"E022","file":"tree.sld","line":4,"column":3,"endLine":4,"endColumn":40,"message":"clause 3 of b/1 unifies with ..."}]}
+```
+
+`severity` is `error`, `warning` or `info`. `file` is the file as it was given on the command line, which tells a problem in the tree from one in the program. Lines and columns start at 1, and the end is exclusive. A problem is marked from where it starts to the end of the code on that line, or to the end of the token for a syntax error. A syntax error is located where the problem is: a brace that is never closed is reported at the brace, and a missing end dot right after the last token of the goal or rule.
 
 ## How it checks
 
@@ -122,6 +135,7 @@ An independent solver in the library (`SLDCheck.Solve`, with cut and negation) d
 | E040, E041, E042 | negation: tree for another goal, wrong outcome, outcome and tree disagree |
 | E050, E051 | wrong answer, missing answer (with `--require-answers`) |
 | E099 | the checker and the reference solver disagree: a bug |
+| S001, S002 | a syntax error in the tree, or in the program (not checked any further) |
 | W001..W006, I001 | unsupported construct, unknown predicate, built-in raises an error, missing answer, redundant binding, undecidable negation, solver stopped early |
 
 ## Layout
@@ -134,7 +148,9 @@ src/SLDCheck/Tree.hs        the abstract syntax of a tree
 src/SLDCheck/Notation.hs    parser for the notation
 src/SLDCheck/Expand.hs      replaces references between trees by the trees
 src/SLDCheck/Check.hs       the checker
+src/SLDCheck/Run.hs         what the command line does: read both files, report syntax errors and problems
 src/SLDCheck/Diagnostic.hs  diagnostics, text and JSON
+src/SLDCheck/Version.hs     the version, which the tests keep equal to the cabal file
 app/Main.hs                 the command line
 test/Spec.hs                cases, examples, comparison with swipl
 examples/                   programs and trees

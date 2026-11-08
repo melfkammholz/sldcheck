@@ -23,7 +23,7 @@ max(X, _, X).
 
 ## Structure
 
-The tree is written by indentation, with spaces (not tabs).
+The tree is written by indentation, with spaces. A tab in the indentation is an error: editors and the checker count its width differently, so the positions of what follows would not agree.
 
 - A line starting with `?-` is a **node**: a goal, ending with a dot.
 - Lines starting with `|` are a **step** below the node: the edge to a child, or a statement about why there is none.

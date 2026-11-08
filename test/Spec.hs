@@ -17,7 +17,10 @@ import SLDCheck.Diagnostic
 import SLDCheck.Logic (isVariant)
 import SLDCheck.Notation
 import SLDCheck.Prolog
+import SLDCheck.Run
 import SLDCheck.Solve
+import SLDCheck.Tree (Pos(..))
+import SLDCheck.Version (version)
 
 --------------------------------------------------------------------------------
 -- Running the checker
@@ -354,6 +357,50 @@ brokenExample = do
         in if errs == want then Nothing
            else Just ("examples/ancestor-broken.sld: expected " ++ show want ++ ", got " ++ show errs)
 
+-- | Syntax errors are reported where the problem is, as diagnostics.
+syntaxCases :: [(String, Maybe String)]
+syntaxCases =
+  [ at "a brace that is never closed" "?- p.\n  | q(X1) :- r.\n  | {X1 |-> a\n  ?- r.\n" (3, 5) "never closed"
+  , at "a goal without its end dot" "?- p(X)\n  | q.\n" (1, 8) "end dot"
+  , at "a rule without its end dot" "?- p.\n  | q :- r\n  ?- r.\n" (2, 11) "of the rule"
+  , at "a tab in the indentation" "?- p.\n\t| q.\n" (2, 1) "tabs"
+  , at "a tab after spaces" "?- p.\n  \t| q.\n" (2, 3) "tabs"
+  , at "a step that is not aligned" "?- p.\n  | q.\n   | {X |-> a}\n" (3, 4) "not aligned"
+  , ("only the syntax, not the semantics", check "a semantic error is not a syntax error" (analyse (SyntaxOnly Nothing (Input "t.sld" "?- q(X).\n"))) [])
+  , ("a syntax error in the program", programError)
+  , ("every diagnostic ends somewhere", ends)
+  , ("a percent sign in quotes is no comment", quotedPercent)
+  , ("the json says where and in which file", json)
+  ]
+  where
+    at name tree (l, c) fragment = (name, case analyse (SyntaxOnly Nothing (Input "t.sld" tree)) of
+      [d] | dCode d == "S001", dRole d == InTree, dPos d == Pos l c, fragment `isInfixOf` dMessage d -> Nothing
+      ds -> Just ("expected S001 at " ++ show (l, c) ++ " about " ++ show fragment ++ ", got " ++ show ds))
+    check what ds want = if map dCode ds == want then Nothing else Just (what ++ ": " ++ show ds)
+    programError = case analyse (CheckTree False (Input "p.pl" "p(a\n") (Input "t.sld" "?- p(a).\n")) of
+      [d] | dCode d == "S002", dRole d == InProgram -> Nothing
+      ds -> Just (show ds)
+    ends = case analyse (CheckTree False (Input "p.pl" "p(a).\n") (Input "t.sld" "?- p(a).  % the query\n")) of
+      ds@(_ : _) | all (\d -> dEnd d == Just (Pos 1 9)) ds -> Nothing
+      ds -> Just (show [(dCode d, dPos d, dEnd d) | d <- ds])
+    quotedPercent = case analyse (CheckTree False (Input "p.pl" "p('100%').\n") (Input "t.sld" "?- p('100%').\n")) of
+      ds@(_ : _) | all (\d -> dEnd d == Just (Pos 1 14)) ds -> Nothing
+      ds -> Just (show [(dCode d, dEnd d) | d <- ds])
+    json =
+      let ds = analyse (SyntaxOnly Nothing (Input "t.sld" "?- p(X)\n"))
+          out = renderJson (Files "t.sld" Nothing) ds
+          wanted = ["\"version\":\"" ++ version ++ "\"", "\"diagnostics\":[", "\"code\":\"S001\"", "\"file\":\"t.sld\"", "\"line\":1,\"column\":8,\"endLine\":1,\"endColumn\":9"]
+      in case filter (not . (`isInfixOf` out)) wanted of
+           []   -> Nothing
+           miss -> Just (show miss ++ " missing from " ++ out)
+
+-- | The version of the program is the version of the package.
+versionMatches :: IO (Maybe String)
+versionMatches = do
+  cabal <- readFile "sldcheck.cabal"
+  let declared = [unwords (drop 1 (words l)) | l <- lines cabal, take 8 l == "version:"]
+  pure (if declared == [version] then Nothing else Just ("sldcheck.cabal says " ++ show declared ++ ", SLDCheck.Version says " ++ show version))
+
 --------------------------------------------------------------------------------
 -- The solver against SWI-Prolog
 
@@ -437,6 +484,12 @@ main = do
   mapM_ putStrLn exampleFailures
   putStrLn (show (length exampleResults - length exampleFailures) ++ "/" ++ show (length exampleResults) ++ " example files are correct")
 
+  let syntaxFailures = [name ++ ": " ++ m | (name, Just m) <- syntaxCases]
+  mapM_ putStrLn syntaxFailures
+  putStrLn (show (length syntaxCases - length syntaxFailures) ++ "/" ++ show (length syntaxCases) ++ " syntax error cases are located right")
+  versionProblem <- versionMatches
+  mapM_ putStrLn versionProblem
+
   broken <- brokenExample
   mapM_ putStrLn broken
   putStrLn (maybe "the broken example reports its five mistakes and nothing else" (const "the broken example is wrong") broken)
@@ -450,4 +503,4 @@ main = do
       mapM_ putStrLn fs
       putStrLn (show (length solverCases - length fs) ++ "/" ++ show (length solverCases) ++ " solver cases agree with swipl")
       pure fs
-  when (not (null failures && null exampleFailures && null solverFailures) || broken /= Nothing) exitFailure
+  when (not (null failures && null exampleFailures && null solverFailures) || broken /= Nothing || not (null syntaxFailures) || versionProblem /= Nothing) exitFailure

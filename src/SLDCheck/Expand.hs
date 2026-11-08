@@ -35,11 +35,11 @@ expandForest forest@(root : others) = (expanded, nub (refProblems ++ ds))
     negName _                 = Nothing
 
     refProblems =
-      [ Diagnostic Error "E005" p ("the tree @" ++ n ++ " is already used as part of a tree at line " ++ show (posLine first)
+      [ diagnostic Error "E005" p ("the tree @" ++ n ++ " is already used as part of a tree at line " ++ show (posLine first)
                                    ++ "; a tree can be a part of one step only")
       | n <- refNames, (first : more) <- [[p' | (n', p') <- refs, n' == n]], p <- more ]
       ++
-      [ Diagnostic Error "E008" p ("the tree @" ++ n ++ " is used as a part of a tree and as the tree of a negation")
+      [ diagnostic Error "E008" p ("the tree @" ++ n ++ " is used as a part of a tree and as the tree of a negation")
       | (n, p) <- negs, n `elem` refNames ]
 
     (expanded, ds) = runWriter $ do
@@ -60,11 +60,11 @@ expandForest forest@(root : others) = (expanded, nub (refProblems ++ ds))
         pure s { stepChild = child }
       Just (name, p)
         | name `elem` vis || Just name == mainName -> do
-            tell [Diagnostic Error "E007" p ("the tree @" ++ name ++ " contains itself: it is reached again through this reference")]
+            tell [diagnostic Error "E007" p ("the tree @" ++ name ++ " contains itself: it is reached again through this reference")]
             pure s
         | Just r <- M.lookup name table -> do
             r' <- expandNode (name : vis) r
             pure s { stepChild = Just r', stepRef = Nothing }
         | otherwise -> do
-            tell [Diagnostic Error "E002" p ("there is no tree @" ++ name ++ ": write it separately, with @" ++ name ++ " after its goal")]
+            tell [diagnostic Error "E002" p ("there is no tree @" ++ name ++ ": write it separately, with @" ++ name ++ " after its goal")]
             pure s

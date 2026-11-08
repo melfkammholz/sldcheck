@@ -24,7 +24,12 @@ module SLDCheck.Notation
   ) where
 
 import Control.Monad
+import Data.Char (isSpace)
+import Data.List (dropWhileEnd)
+import Data.Maybe (listToMaybe)
 import Text.Parsec
+import Text.Parsec.Error (Message(..), errorMessages, newErrorMessage)
+import Text.Parsec.Pos (newPos, updatePosString)
 
 import SLDCheck.Prolog
 import SLDCheck.Tree
@@ -36,7 +41,52 @@ parseForest = parseForestWith defaultOps
 --   infix operator here (write disjunction as @;@): a goal whose end dot was
 --   forgotten would otherwise run into the @|@ of the next step.
 parseForestWith :: OpTable -> SourceName -> String -> Either ParseError Forest
-parseForestWith ops = runParser forest (addOp 0 XFY "|" ops)
+parseForestWith ops name src = case leadingTab src of
+  Just (l, c) -> Left (newErrorMessage (Message "tabs are not allowed in the indentation: use spaces") (newPos name l c))
+  Nothing     -> either (Left . relocate name) Right (runParser forest (addOp 0 XFY "|" ops) name src)
+
+-- | The first tab among the spaces that indent a line.  Editors count a tab as
+--   one column and Parsec as up to eight, so the positions of everything after
+--   it would be wrong; the structure of a tree is its indentation anyway.
+leadingTab :: String -> Maybe (Int, Int)
+leadingTab src = listToMaybe [ (l, length (takeWhile (== ' ') ln) + 1)
+                             | (l, ln) <- zip [1 ..] (lines src), '\t' `elem` takeWhile isSpace ln ]
+
+-- | Parsec reports an error where reading stopped.  For a brace that is never
+--   closed or an end dot that is missing that is somewhere else than the problem,
+--   so such a failure carries the place it is about (see 'failAt'), which is
+--   put back into the error here.
+relocate :: SourceName -> ParseError -> ParseError
+relocate name err = case [m | Message m <- errorMessages err, take 1 m == "\0"] of
+  m : _ -> let (loc, rest) = break (== '\0') (drop 1 m)
+               (l, c)      = break (== ':') loc
+           in newErrorMessage (Message (drop 1 rest)) (newPos name (read l) (read (drop 1 c)))
+  []    -> err
+
+-- | Fail with a message about an earlier place.  Parsec merges an error that
+--   consumed nothing with what the parsers before it expected, and keeps the one
+--   that is further on, so a character is consumed first: then the error stands
+--   alone.  It is moved to the right place by 'relocate'.
+failAt :: SourcePos -> String -> Parser a
+failAt p msg = optional anyChar >> fail ("\0" ++ show (sourceLine p) ++ ":" ++ show (sourceColumn p) ++ "\0" ++ msg)
+
+-- | A term, and the place right after its last token (the layout after it does not count).
+termEnding :: Int -> Parser (Term, SourcePos)
+termEnding prio = do
+  start  <- getPosition
+  before <- getInput
+  t      <- term prio
+  after  <- getInput
+  let consumed = take (length before - length after) before
+  pure (t, updatePosString start (dropWhileEnd isSpace consumed))
+
+-- | The end dot of what was just read, which ended at the given place.
+endDotAfter :: String -> SourcePos -> Parser ()
+endDotAfter what p = do
+  found <- optionMaybe endDot
+  case found of
+    Just () -> pure ()
+    Nothing -> failAt p ("the end dot (\".\") of " ++ what ++ " is missing")
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -91,8 +141,8 @@ node = do
   pos <- position
   n   <- column
   _   <- tok (try (string "?-")) <?> "a node (\"?-\")"
-  g   <- term 1200 <?> "a goal"
-  _   <- endDot <?> "the end dot of the goal (\".\")"
+  (g, gEnd) <- termEnding 1200 <?> "a goal"
+  endDotAfter "the goal" gEnd
   name <- optionMaybe atName
   ans  <- optionMaybe subst
   steps <- stepsBelow n
@@ -186,13 +236,20 @@ stepHead = choice
 
 rule :: Parser Term
 rule = do
-  r <- term 1200 <?> "a rule"
-  _ <- endDot <?> "the end dot of the rule (\".\")"
+  (r, rEnd) <- termEnding 1200 <?> "a rule"
+  endDotAfter "the rule" rEnd
   pure r
 
 -- | @{ X |-> t, Y |-> u }@, possibly empty.
 subst :: Parser Subst
-subst = between (tok (char '{')) (tok (char '}')) (binding `sepBy` tok (char ','))
+subst = do
+  open <- getPosition
+  _    <- tok (char '{')
+  bs   <- binding `sepBy` tok (char ',')
+  closed <- optionMaybe (tok (char '}'))
+  case closed of
+    Just _  -> pure bs
+    Nothing -> failAt open "this brace is never closed: expected \",\" or \"}\" after the last binding"
 
 binding :: Parser (String, Term)
 binding = do
