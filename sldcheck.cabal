@@ -1,0 +1,52 @@
+cabal-version:      3.4
+name:               sldcheck
+version:            0.1.0.0
+synopsis:           A checker for SLD trees of Prolog programs
+description:
+  Reads an SLD tree written in a small text notation and checks it against a
+  Prolog program: resolution steps, unifiers, branches, the cut, negation as
+  failure and answers. Every problem found is reported with a stable code.
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Melf Kammholz
+maintainer:         Melf Kammholz
+category:           Language, Education
+build-type:         Simple
+tested-with:        GHC == 9.10.3
+extra-doc-files:
+  README.md
+  NOTATION.md
+extra-source-files:
+  examples/*.pl
+  examples/*.sld
+
+common shared
+  default-language: Haskell2010
+  ghc-options:      -Wall -Wno-name-shadowing -Wno-unused-do-bind
+  build-depends:    base >=4.20 && <4.22, containers >=0.6 && <0.8, mtl >=2.3 && <2.4, parsec >=3.1 && <3.2
+
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:
+    SLDCheck.Prolog
+    SLDCheck.Logic
+    SLDCheck.Solve
+    SLDCheck.Tree
+    SLDCheck.Notation
+    SLDCheck.Expand
+    SLDCheck.Diagnostic
+    SLDCheck.Check
+
+executable sldcheck
+  import:           shared
+  hs-source-dirs:   app
+  main-is:          Main.hs
+  build-depends:    sldcheck
+
+test-suite spec
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Spec.hs
+  build-depends:    sldcheck, directory >=1.3 && <1.4, filepath >=1.4 && <1.6, process >=1.6 && <1.7

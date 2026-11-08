@@ -1,0 +1,16 @@
+# cabal
+dist-newstyle/
+dist/
+cabal.project.local*
+.ghc.environment.*
+
+# GHC build products
+*.o
+*.hi
+*.dyn_o
+*.dyn_hi
+
+# editors and systems
+.DS_Store
+*.swp
+*~
