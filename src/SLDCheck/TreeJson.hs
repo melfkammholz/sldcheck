@@ -13,7 +13,7 @@
 --
 -- The kinds, and what else a step has:
 --
--- > "resolve"          "rule": "member(X2, [_2|T2]) :- member(X2, T2)", "subst": [Binding] | null
+-- > "resolve"          "rule": "member(X2, [_2|T2]) :- member(X2, T2)", "clause": 2 | null, "subst": [Binding] | null
 -- > "builtin"          "subst": [Binding] | null
 -- > "cut"
 -- > "negation"         "tree": "t1"            -- the name of the tree of the negated goal
@@ -73,7 +73,7 @@ step ops s = Obj $
       Builtin   -> True
       _         -> False
     (kind, extra) = case stepKind s of
-      Resolve r            -> ("resolve", [("rule", Str (showTermWith ops r))])
+      Resolve r            -> ("resolve", [("rule", Str (showTermWith ops r)), ("clause", maybe Null Num (stepClause s))])
       Builtin              -> ("builtin", [])
       CutStep              -> ("cut", [])
       Negation t           -> ("negation", [("tree", Str t)])

@@ -378,13 +378,13 @@ syntaxCases =
       [d] | dCode d == "S001", dRole d == InTree, dPos d == Pos l c, fragment `isInfixOf` dMessage d -> Nothing
       ds -> Just ("expected S001 at " ++ show (l, c) ++ " about " ++ show fragment ++ ", got " ++ show ds))
     check what ds want = if map dCode ds == want then Nothing else Just (what ++ ": " ++ show ds)
-    programError = case analyse (CheckTree False (Input "p.pl" "p(a\n") (Input "t.sld" "?- p(a).\n")) of
+    programError = case analyse (CheckTree False False (Input "p.pl" "p(a\n") (Input "t.sld" "?- p(a).\n")) of
       [d] | dCode d == "S002", dRole d == InProgram -> Nothing
       ds -> Just (show ds)
-    ends = case analyse (CheckTree False (Input "p.pl" "p(a).\n") (Input "t.sld" "?- p(a).  % the query\n")) of
+    ends = case analyse (CheckTree False False (Input "p.pl" "p(a).\n") (Input "t.sld" "?- p(a).  % the query\n")) of
       ds@(_ : _) | all (\d -> dEnd d == Just (Pos 1 9)) ds -> Nothing
       ds -> Just (show [(dCode d, dPos d, dEnd d) | d <- ds])
-    quotedPercent = case analyse (CheckTree False (Input "p.pl" "p('100%').\n") (Input "t.sld" "?- p('100%').\n")) of
+    quotedPercent = case analyse (CheckTree False False (Input "p.pl" "p('100%').\n") (Input "t.sld" "?- p('100%').\n")) of
       ds@(_ : _) | all (\d -> dEnd d == Just (Pos 1 14)) ds -> Nothing
       ds -> Just (show [(dCode d, dEnd d) | d <- ds])
     json =
@@ -422,7 +422,8 @@ treeCases = do
       nestedOut = treeOutput "ancestor.sld" ancP nested
       splitOut  = treeOutput "ancestor-split.sld" ancP split
   pure $
-    [ has "rule" m "\"kind\":\"resolve\",\"rule\":\"member(X1, [X1|_1])\""
+    [ has "rule" m "\"kind\":\"resolve\",\"rule\":\"member(X1, [X1|_1])\",\"clause\":1"
+    , has "rule number" m "\"clause\":2"
     , has "built-in" m "\"kind\":\"builtin\",\"subst\":[{\"var\":\"Y\",\"term\":\"2\"}]"
     , has "answer" m "\"answer\":[{\"var\":\"X\",\"term\":\"1\"},{\"var\":\"Y\",\"term\":\"2\"}]"
     , has "goal" m "\"goal\":\"member(X, [1, 2]), Y is X + 1\""
@@ -520,6 +521,35 @@ runSolverCase (name, prog, query) = do
 
 --------------------------------------------------------------------------------
 
+-- | Cases run with anonymous variables allowed: program, tree, error codes.
+anonCases :: [(String, String, String, [String])]
+anonCases =
+  [ ("_ in a rule needs no binding", "p(a, _).\n", "?- p(X, Y).\n  | p(a, _).\n  | {X |-> a}\n  ?- true.                      {X |-> a}\n", [])
+  , ("_ in a rule, wrong answer", "p(a, _).\n", "?- p(X, Y).\n  | p(a, _).\n  | {X |-> a}\n  ?- true.                      {X |-> a, Y |-> b}\n", ["E050"])
+  , ("_ in the query", "p(a, _).\np(c, _).\n", "?- p(X, _).\n  | p(a, _).\n  | {X |-> a}\n  ?- true.                      {X |-> a}\n  | p(c, _).\n  | {X |-> c}\n  ?- true.                      {X |-> c}\n", [])
+  , ("_ in a goal below", "q(X) :- p(X, Y), r(Y).\np(a, b).\nr(b).\n", unlines
+      [ "?- q(X)."
+      , "  | q(X1) :- p(X1, Y1), r(Y1)."
+      , "  | {X1 |-> X}"
+      , "  ?- p(X, _), r(_)."
+      , "    | p(a, b)."
+      , "    | {X |-> a, Y1 |-> b}"
+      , "    ?- r(b)."
+      , "      | r(b)."
+      , "      | {}"
+      , "      ?- true.                  {X |-> a}" ], [])
+  , ("_ stands for the wrong term", "p(a).\nq(X) :- p(X).\n", "?- q(X).\n  | q(X1) :- p(X1).\n  | {X1 |-> X}\n  ?- r(_).\n", ["E020", "E022", "E025"])
+  ]
+
+anonCase :: (String, String, String, [String]) -> Maybe String
+anonCase (name, prog, tree, want) = case loadProgram "program" prog of
+  Left e -> Just (name ++ ": " ++ e)
+  Right (p, ops) -> case parseForestWith ops "tree" tree of
+    Left e -> Just (name ++ ": syntax error: " ++ show e)
+    Right forest ->
+      let got = codesOf Error (checkForest ((defaultOptions p) { optAllowAnonymous = True }) forest)
+      in if got == sort want then Nothing else Just (name ++ ": expected " ++ show want ++ ", got " ++ show got)
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -535,6 +565,9 @@ main = do
   let syntaxFailures = [name ++ ": " ++ m | (name, Just m) <- syntaxCases]
   mapM_ putStrLn syntaxFailures
   putStrLn (show (length syntaxCases - length syntaxFailures) ++ "/" ++ show (length syntaxCases) ++ " syntax error cases are located right")
+  let anonFailures = [m | Just m <- map anonCase anonCases]
+  mapM_ putStrLn anonFailures
+  putStrLn (show (length anonCases - length anonFailures) ++ "/" ++ show (length anonCases) ++ " anonymous variable cases pass")
   treeProblems <- treeCases
   let treeFailures = [m | Just m <- treeProblems]
   mapM_ putStrLn treeFailures
@@ -555,4 +588,5 @@ main = do
       mapM_ putStrLn fs
       putStrLn (show (length solverCases - length fs) ++ "/" ++ show (length solverCases) ++ " solver cases agree with swipl")
       pure fs
+  when (not (null anonFailures)) exitFailure
   when (not (null failures && null exampleFailures && null solverFailures) || broken /= Nothing || not (null syntaxFailures) || not (null treeFailures) || versionProblem /= Nothing) exitFailure

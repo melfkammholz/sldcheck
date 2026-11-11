@@ -39,6 +39,10 @@ data Step = Step
   , stepRef   :: Maybe (String, Pos)
     -- ^ @\@t@ instead of a node: the child is the root of the tree @t@
     --   written elsewhere (see "SLDCheck.Expand", which replaces it by the node)
+  , stepClause :: Maybe Int
+    -- ^ for a rule step: the number of the clause (within its predicate, from 1)
+    --   the rule is a renamed copy of.  The parser leaves it empty;
+    --   'SLDCheck.Check.numberRules' fills it in when the program is known.
   } deriving (Eq, Show)
 
 data StepKind

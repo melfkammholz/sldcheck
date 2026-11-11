@@ -17,7 +17,7 @@ import SLDCheck.Version (version)
 
 usage :: String
 usage = unlines
-  [ "usage: sldcheck [--json] [--require-answers] TREE.sld PROGRAM.pl"
+  [ "usage: sldcheck [--json] [--require-answers] [--allow-anonymous] TREE.sld PROGRAM.pl"
   , "       sldcheck --syntax [--json] TREE.sld [PROGRAM.pl]"
   , "       sldcheck --tree TREE.sld [PROGRAM.pl]"
   , "       sldcheck --version"
@@ -27,6 +27,7 @@ usage = unlines
   , ""
   , "  --json             print the diagnostics as a JSON object"
   , "  --require-answers  a proven node without its answer is an error, not a warning"
+  , "  --allow-anonymous  goals and rules in the tree may use _; it need not appear in a substitution"
   , "  --syntax           only read the tree, which is much quicker; the program is only"
   , "                     needed if it declares operators the tree uses"
   , "  --tree             print the tree as JSON, for drawing it (see README.md)"
@@ -41,12 +42,13 @@ data Opts = Opts
   , oRequire :: Bool
   , oSyntax  :: Bool
   , oTree    :: Bool
+  , oAllowAnon :: Bool
   }
 
 data Command = Version | Help | Run Opts
 
 parseArgs :: [String] -> Either String Command
-parseArgs = go (Opts [] False False False False)
+parseArgs = go (Opts [] False False False False False)
   where
     go o as = case as of
       []                         -> Right (Run o { oFiles = reverse (oFiles o) })
@@ -55,6 +57,7 @@ parseArgs = go (Opts [] False False False False)
       "-h" : _                   -> Right Help
       "--json" : rest            -> go o { oJson = True } rest
       "--require-answers" : rest -> go o { oRequire = True } rest
+      "--allow-anonymous" : rest -> go o { oAllowAnon = True } rest
       "--syntax" : rest          -> go o { oSyntax = True } rest
       "--tree" : rest            -> go o { oTree = True } rest
       a : _ | take 1 a == "-" && a /= "-" -> Left ("unknown option " ++ a)
@@ -87,7 +90,7 @@ run o = case (oSyntax o || oTree o, oFiles o) of
       if oTree o then showTree prog treeIn else check prog treeIn
     check prog treeIn = do
       let job = case (oSyntax o, prog) of
-            (False, Just p) -> CheckTree (oRequire o) p treeIn
+            (False, Just p) -> CheckTree (oRequire o) (oAllowAnon o) p treeIn
             (_, p)          -> SyntaxOnly p treeIn
           ds = analyse job
           files = Files (inputName treeIn) (inputName <$> prog)

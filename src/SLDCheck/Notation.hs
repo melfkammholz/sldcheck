@@ -195,7 +195,7 @@ step m = do
     else if isNode then (\nd -> (Just nd, Nothing)) <$> node
     else if isRef then do { p <- position; nm <- atName; pure (Nothing, Just (nm, p)) }
     else pure (Nothing, Nothing)
-  pure (Step pos kind sub child ref)
+  pure (Step pos kind sub child ref Nothing)
 
 -- | The start of the @| {...}@ line of a step: the bar, up to the brace.
 substStart :: Int -> Parser ()

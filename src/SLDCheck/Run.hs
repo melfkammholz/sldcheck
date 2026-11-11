@@ -27,7 +27,7 @@ import SLDCheck.Tree (Forest, Pos(..))
 data Input = Input { inputName :: FilePath, inputText :: String }
 
 data Job
-  = CheckTree { jobRequireAnswers :: Bool, jobProgram :: Input, jobTree :: Input }
+  = CheckTree { jobRequireAnswers :: Bool, jobAllowAnonymous :: Bool, jobProgram :: Input, jobTree :: Input }
     -- ^ everything: the tree is checked against the program
   | SyntaxOnly { jobProgramMaybe :: Maybe Input, jobTree :: Input }
     -- ^ only read the tree (and the program, if there is one, for its operators)
@@ -46,8 +46,8 @@ analyse job = completeEnds (inputText tree) (maybe "" inputText mprog) result
         Left e       -> [fromParseError InTree (inputText tree) e]
         Right forest -> case job of
           SyntaxOnly {}                   -> []
-          CheckTree { jobRequireAnswers = req } ->
-            checkForest ((defaultOptions (maybe [] fst mp)) { optRequireAnswers = req }) forest
+          CheckTree { jobRequireAnswers = req, jobAllowAnonymous = anon } ->
+            checkForest ((defaultOptions (maybe [] fst mp)) { optRequireAnswers = req, optAllowAnonymous = anon }) forest
 
     readProgram = case mprog of
       Nothing -> Right Nothing
@@ -65,7 +65,7 @@ readTree mprog tree = completeAll $ case parseProgram' of
     let ops = maybe defaultOps snd mp
     in case parseForestWith ops (inputName tree) (inputText tree) of
          Left e       -> ([fromParseError InTree (inputText tree) e], Nothing)
-         Right forest -> let (expanded, ds) = expandForest forest in (ds, Just (ops, expanded))
+         Right forest -> let (expanded, ds) = expandForest forest in (ds, Just (ops, numberRules (maybe [] fst mp) expanded))
   where
     parseProgram' = case mprog of
       Nothing -> Right Nothing

@@ -53,7 +53,7 @@ examples/cut.sld: no problems found
 Without the last line, the second clause is neither drawn nor pruned:
 
 ```
-cut-broken.sld:2:1: error[E022]: clause 2 of first_child/2 unifies with `first_child(tom, C)` but is neither drawn nor pruned: `first_child(_, none)`
+cut-broken.sld:2:1: error[E022]: clause 2 of first_child/2 unifies with `first_child(tom, C)` but no step uses it: it is neither resolved with nor pruned: `first_child(_, none)`
 cut-broken.sld: 1 error, 0 warnings, 0 notes
 ```
 
@@ -62,16 +62,17 @@ cut-broken.sld: 1 error, 0 warnings, 0 notes
 ## Usage
 
 ```
-sldcheck [--json] [--require-answers] TREE.sld PROGRAM.pl
+sldcheck [--json] [--require-answers] [--allow-anonymous] TREE.sld PROGRAM.pl
 sldcheck --syntax [--json] TREE.sld [PROGRAM.pl]
 sldcheck --tree TREE.sld [PROGRAM.pl]
 sldcheck --version
 ```
 
 - `TREE.sld` can be `-` for standard input.
+- `--allow-anonymous` lets goals and rules in the tree use `_`. Each `_` is a variable of its own; it need not occur in a substitution, and in a goal it stands for whatever the resolvent has at that place. Without the flag it is error E010.
 - `--json` prints the diagnostics as a JSON object (see below).
 - `--require-answers` makes a proven node without its answer an error instead of a warning.
-- `--tree` prints the tree as JSON, for tools that draw it (see below). It checks nothing, and has no use for the program unless that declares operators.
+- `--tree` prints the tree as JSON, for tools that draw it (see below). It checks nothing. The program is optional: it supplies operators and the clause number of each rule step.
 - `--syntax` only reads the tree, without checking it: much quicker, for an editor that wants to show syntax errors while a tree is being written. The program is only needed if it declares operators the tree uses.
 - Exit status: 0 no errors (warnings may be printed), 1 the tree has errors, 2 bad input. A syntax error in the tree or in the program is reported like any other problem (codes `S001` and `S002`), also in JSON, and gives status 2.
 
@@ -104,7 +105,7 @@ Step = { "line", "column", "kind", "child": Node | null, "ref"?: "name", ... }
 
 | `kind` | also has |
 |---|---|
-| `resolve` | `rule` (the renamed clause, without the end dot), `subst` |
+| `resolve` | `rule` (the renamed clause, without the end dot), `clause` (its number within the predicate, from 1; `null` if there is no program or no clause fits), `subst` |
 | `builtin` | `subst` |
 | `negation`, `negation-fails` | `tree`: the name of the tree of the negated goal |
 | `pruned` | `predicate` (`member/2`), `clause`, `by`: the name of the cut node |
@@ -143,7 +144,7 @@ An independent solver in the library (`SLDCheck.Solve`, with cut and negation) d
 | E003, E004, E005 | a tree after the first is referenced by nothing, has no name, or is used twice |
 | E006 | an answer on a node that is not proven |
 | E007, E008 | references between trees: a tree contains itself, or is used both as a part and as the tree of a negation |
-| E010 | anonymous variable `_` in a goal or rule |
+| E010 | anonymous variable `_` in a goal or rule (allowed with `--allow-anonymous`) |
 | E011 | the rule is not a renamed copy of a clause |
 | E012 | the rule is not renamed apart from earlier variables |
 | E013 | the rule is for another predicate than the selected literal |

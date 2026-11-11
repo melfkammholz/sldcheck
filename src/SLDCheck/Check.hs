@@ -32,6 +32,7 @@ module SLDCheck.Check
   , defaultOptions
   , checkForest
   , loadProgram
+  , numberRules
   ) where
 
 import Control.Monad
@@ -53,10 +54,11 @@ data Options = Options
   { optProgram        :: Program
   , optBudget         :: Int     -- ^ steps the reference solver may take
   , optRequireAnswers :: Bool    -- ^ is a success node without its answer an error?
+  , optAllowAnonymous :: Bool    -- ^ may goals and rules in the tree use @_@?
   }
 
 defaultOptions :: Program -> Options
-defaultOptions p = Options p 200000 False
+defaultOptions p = Options p 200000 False False
 
 -- | Read a program; the operator table at its end is for reading the tree.
 loadProgram :: SourceName -> String -> Either String (Program, OpTable)
@@ -139,6 +141,7 @@ data Env = Env
   , envTrees   :: M.Map String ANode       -- ^ the roots of the trees after the first
   , envBudget  :: Int
   , envRequire :: Bool
+  , envAnon    :: Bool
   }
 
 data Ctx = Ctx
@@ -169,7 +172,8 @@ checkForest opts forest0 = sortDiagnostics (nub (expansionProblems ++ oDiags out
       , envNames   = M.fromListWith (\_ old -> old) named
       , envTrees   = M.fromList [(nm, a) | a <- aothers, Just nm <- [nodeName (aN a)]]
       , envBudget  = optBudget opts
-      , envRequire = optRequireAnswers opts }
+      , envRequire = optRequireAnswers opts
+      , envAnon    = optAllowAnonymous opts }
 
     -- the query's tree first: it says which trees the negations use
     mainOut = execWriter (walkTree env S.empty amain True)
@@ -208,16 +212,18 @@ checkForest opts forest0 = sortDiagnostics (nub (expansionProblems ++ oDiags out
             ("the checker found no problems, but the tree's answers differ from the reference solver's (tree only: "
              ++ describeAnswers extra ++ "; solver only: " ++ describeAnswers absent ++ "). This is a bug in the checker.")]
       where
-        Result ref complete = solveQuery (optProgram opts) (nodeGoal root) (optBudget opts)
+        Result ref complete = solveQuery (optProgram opts) (rootGoal (optAllowAnonymous opts) "" (nodeGoal root)) (optBudget opts)
         (extra, absent) = pairUp (oAnswers mainOut) ref
-        qv = termVars (toCore (nodeGoal root))
+        qv = termVars (toCore (rootGoal (optAllowAnonymous opts) "" (nodeGoal root)))
         describeAnswers as = if null as then "none" else intercalate " / " (map (showAns qv) as)
 
 -- | Check one tree.  The flag says whether its answers count (the query's
 --   tree) or not (the tree of a negation).
 walkTree :: Env -> S.Set String -> ANode -> Bool -> W ()
-walkTree env used0 root countAnswers = body
+walkTree env used0 root0 countAnswers = body
   where
+    -- with anonymous variables allowed, each @_@ of the first goal is a variable of its own
+    root  = root0 { aN = (aN root0) { nodeGoal = rootGoal (envAnon env) (tagOf (nodePos (aN root0))) (nodeGoal (aN root0)) } }
     goal  = toCore (nodeGoal (aN root))
     qv    = termVars goal
     cx    = Ctx (used0 `S.union` S.fromList qv) (M.fromList [(v, Var v) | v <- qv]) qv
@@ -227,9 +233,28 @@ walkTree env used0 root countAnswers = body
 --------------------------------------------------------------------------------
 -- One node
 
+-- | The goal at the root of a tree, with its @_@ made variables of their own
+--   if anonymous variables are allowed.
+rootGoal :: Bool -> String -> Term -> Term
+rootGoal allowed tag g
+  | allowed   = freshenAnonymousAt ("root" ++ tag ++ ".") g
+  | otherwise = g
+
+-- | A tag for the anonymous variables made at a place in the tree.
+tagOf :: Pos -> String
+tagOf (Pos l c) = show l ++ ":" ++ show c ++ "."
+
+-- | Replace the anonymous variables of the second term by what the first
+--   term has in their place, as far as the two have the same shape.
+fillAnon :: Term -> Term -> Term
+fillAnon e (Var "_") = e
+fillAnon (Compound f es) (Compound g as)
+  | f == g, length es == length as = Compound g (zipWith fillAnon es as)
+fillAnon _ a = a
+
 walk :: Env -> Ctx -> ANode -> W ()
 walk env cx an = do
-  when (hasAnon goalT) $ anonymous pos
+  when (hasAnon goalT && not (envAnon env)) $ anonymous pos
   when (not (null lits) && isJust (nodeAnswer n)) $
     err "E006" pos "an answer can only be stated at a proven node (goal `true`); this node still has goals left"
   case lits of
@@ -249,7 +274,7 @@ walk env cx an = do
       forM_ (aSteps an) $ \st ->
         err "E027" (stepPos (aS st)) "this node has the empty goal: the query is proven here and nothing can be derived from it"
       tell (Out [] [[cxAns cx M.! v | v <- cxQVars cx]] [])
-      let expected = M.filterWithKey (\v t -> t /= Var v) (cxAns cx)
+      let expected = M.filterWithKey (\v t -> t /= Var v && not (isAnonName v)) (cxAns cx)
       case nodeAnswer n of
         Nothing
           | M.null expected -> pure ()
@@ -263,7 +288,7 @@ walk env cx an = do
 
 anonymous :: Pos -> W ()
 anonymous pos = err "E010" pos
-  "the anonymous variable _ cannot be bound by a substitution: give it a name (_1, _G2, ...); the renamed rule needs a fresh name for it too"
+  "the anonymous variable _ cannot be bound by a substitution: give it a name (_1, _G2, ...); the renamed rule needs a fresh name for it too (or run with --allow-anonymous)"
 
 hasAnon :: Term -> Bool
 hasAnon t = case t of
@@ -349,20 +374,24 @@ unifierReport pos a b bindings = (dups ++ trivial ++ extra ++ main, valid)
 --   renaming.  When the goal is wrong, the right one is returned: the checker
 --   goes on below the node as if it had been written, so that one mistake
 --   does not make everything under it look wrong.
-checkResolvent :: [Term] -> Sub -> Bool -> Maybe Sub -> ANode -> W (Maybe [Term])
-checkResolvent new theta valid mgu child
-  | ok        = pure Nothing
+checkResolvent :: Bool -> [Term] -> Sub -> Bool -> Maybe Sub -> ANode -> W (Maybe [Term])
+checkResolvent anon new theta valid mgu child
+  | ok        = pure (if anon && any hasAnon actual0 then Just shown else Nothing)
   | otherwise = do
       err "E020" (nodePos (aN child))
         ("wrong goal: it should be " ++ qGoal shown ++ ", but the node has " ++ qGoal actual ++ hint)
       pure (Just shown)
   where
     shown    = if valid then expected else fromMaybe expected (listToMaybe byMgu)
-    actual   = goalLits (toCore (nodeGoal (aN child)))
+    actual0  = goalLits (toCore (nodeGoal (aN child)))
+    -- an anonymous variable in the node stands for whatever the resolvent has there
+    actualFor e | anon && length e == length actual0 = zipWith fillAnon e actual0
+                | otherwise                          = actual0
+    actual   = actualFor expected
     expected = map (applySub theta) new
     byMgu    = [map (applySub s) new | not valid, Just s <- [mgu]]
     ok | valid     = expected == actual
-       | otherwise = any (\e -> length e == length actual && isVariant (Compound "g" e) (Compound "g" actual)) byMgu
+       | otherwise = any (\e -> length e == length (actualFor e) && isVariant (Compound "g" e) (Compound "g" (actualFor e))) byMgu
     hint
       | map showT shown /= map showT actual
       , sort (map showT shown) == sort (map showT actual) =
@@ -376,7 +405,7 @@ descend :: Env -> Ctx -> AStep -> [Term] -> Sub -> [Term] -> Bool -> Maybe Sub -
 descend env cx st rule theta new valid mgu = case aChild st of
   Nothing -> err "E029" (stepPos (aS st)) "this step has no node below it: write the goal that results from it, aligned with the step"
   Just c0 -> do
-    repaired <- checkResolvent new theta valid mgu c0
+    repaired <- checkResolvent (envAnon env) new theta valid mgu c0
     let c  = maybe c0 (\ls -> c0 { aN = (aN c0) { nodeGoal = goalFromLits ls } }) repaired
         cx' = cx { cxUsed = cxUsed cx `S.union` S.fromList (concatMap termVars rule ++ termVars (toCore (nodeGoal (aN c))))
                  , cxAns  = M.map (applySub theta) (cxAns cx) }
@@ -445,11 +474,13 @@ checkNegation env cx an g rest = do
           | otherwise ->
               err "E002" spos ("there is no tree @" ++ t ++ ": write the tree of the negated goal separately, with @" ++ t ++ " after its goal")
         Just inner -> do
-          let ig = goalLits (toCore (nodeGoal (aN inner)))
+          let ig0 = goalLits (toCore (nodeGoal (aN inner)))
+              ig  = if envAnon env && length ig0 == length glits then zipWith fillAnon glits ig0 else ig0
+              inner' = inner { aN = (aN inner) { nodeGoal = goalFromLits ig } }
           if ig /= glits
             then err "E040" (nodePos (aN inner)) ("the tree @" ++ t ++ " starts with " ++ qGoal ig ++ ", but the negated goal is " ++ qGoal glits)
             else pure ()
-          walkTree env (cxUsed cx `S.union` S.fromList (termVars g)) inner False
+          walkTree env (cxUsed cx `S.union` S.fromList (termVars g)) inner' False
           let provenNodes = [x | x <- preorder inner, null (goalLits (toCore (nodeGoal (aN x))))]
               drawnSuccess = not (null provenNodes)
           when continues $ forM_ (take 1 provenNodes) $ \x ->
@@ -569,7 +600,7 @@ checkCall env cx an sel rest = case predicateOf sel of
         let hits = [st | (st, r) <- pairs, clauseOf r == Just k]
         when (null hits) $
           err "E022" pos ("clause " ++ show k ++ " of " ++ pind pr ++ " unifies with " ++ q sel
-                          ++ " but is neither drawn nor pruned" ++ concat [": " ++ q (clauseTerm cl) | cl <- alts, clauseNo cl == k])
+                          ++ ", but no step uses it: it is neither resolved with nor pruned" ++ concat [": " ++ q (clauseTerm cl) | cl <- alts, clauseNo cl == k])
         forM_ (zip hits (drop 1 hits)) $ \(first, st) ->
           err "E023" (stepPos (aS st)) ("clause " ++ show k ++ " of " ++ pind pr ++ " is already used by the step at line " ++ show (posLine (stepPos (aS first))))
       checkOrder pr pairs
@@ -606,15 +637,7 @@ checkCall env cx an sel rest = case predicateOf sel of
       Fails        -> RMarker : assign usedKs sts
       _            -> RWrong : assign usedKs sts
 
-    pickClause usedKs r = case predicateOf sel of
-      Nothing -> Nothing
-      Just pr ->
-        let cands = [clauseNo cl | cl <- M.findWithDefault [] pr (envDb env), sameClause r cl]
-        in listToMaybe ([k | k <- cands, k `notElem` usedKs] ++ cands)
-
-    sameClause r cl = isVariant (asClause (toCore (freshenAnonymous r)))
-                                (asClause (Compound ":-" [clauseHead cl, goalFromLits (clauseBody cl)]))
-    asClause t = let (h, b) = splitClause t in Compound ":-" [h, goalFromLits b]
+    pickClause = pickClauseIn (envDb env) sel
 
     checkOrder _ pairs = go 0 pairs
       where
@@ -633,9 +656,9 @@ checkCall env cx an sel rest = case predicateOf sel of
 
     resolveRule pr st mk cutAbove r0 = do
       let spos = stepPos (aS st)
-          r  = freshenAnonymous (toCore r0)
+          r  = freshenAnonymousAt (tagOf spos) (toCore r0)
           (h, body) = splitClause r
-      when (hasAnon r0) $ anonymous spos
+      when (hasAnon r0 && not (envAnon env)) $ anonymous spos
       case cutAbove of
         Just c | isJust mk -> err "E033" spos
           ("clause " ++ show (fromJust mk) ++ " of " ++ pind pr ++ " is never tried: " ++ nodeRef c
@@ -655,7 +678,10 @@ checkCall env cx an sel rest = case predicateOf sel of
                 err "E012" spos ("the rule has not been renamed apart: " ++ intercalate ", " clash
                                  ++ (if length clash == 1 then " is" else " are")
                                  ++ " already used earlier in the derivation (root query, earlier rules or this goal); use fresh variables")
-              let bs = fromMaybe [] (stepSubst (aS st))
+              -- an anonymous variable is not written in the substitution; it is bound all the same
+              let bs0 = fromMaybe [] (stepSubst (aS st))
+                  bs  = bs0 ++ [ (v, t) | envAnon env, Just sigma <- [unifyHead sel h]
+                                        , (v, t) <- M.toList sigma, isAnonName v, v `notElem` map fst bs0 ]
                   (ds, valid) = unifierReport spos sel h bs
               tell (Out ds [] [])
               descend env cx st [r] (toSub bs) (body ++ rest) valid (unifyHead sel h)
@@ -689,6 +715,39 @@ checkCall env cx an sel rest = case predicateOf sel of
                 | otherwise ->
                     err "E031" spos ("the cut @" ++ by ++ " does not prune this alternative; the first cut that does is " ++ nodeRef c)
               _ -> pure ()
+
+--------------------------------------------------------------------------------
+-- Numbering the rules
+
+-- | The clause a rule is a renamed copy of: the first one that no earlier
+--   step of the node has used, or else the first that fits.
+pickClauseIn :: M.Map Indicator [Clause] -> Term -> [Int] -> Term -> Maybe Int
+pickClauseIn db sel usedKs r = case predicateOf sel of
+  Nothing -> Nothing
+  Just pr ->
+    let cands = [clauseNo cl | cl <- M.findWithDefault [] pr db, sameClause cl]
+    in listToMaybe ([k | k <- cands, k `notElem` usedKs] ++ cands)
+  where
+    sameClause cl = isVariant (asClause (toCore (freshenAnonymous r)))
+                              (asClause (Compound ":-" [clauseHead cl, goalFromLits (clauseBody cl)]))
+    asClause t = let (h, b) = splitClause t in Compound ":-" [h, goalFromLits b]
+
+-- | Fill in 'stepClause' of every rule step in the trees: the number of the
+--   clause of the program (within its predicate, from 1) that the rule is a
+--   copy of; Nothing if it is a copy of none.  Nothing is checked.
+numberRules :: Program -> Forest -> Forest
+numberRules prog = map goNode
+  where
+    db = indexProgram prog
+    goNode n = n { nodeSteps = goSteps [] (nodeSteps n) }
+      where
+        sel = listToMaybe (goalLits (toCore (nodeGoal n)))
+        goSteps _ [] = []
+        goSteps used (s : ss) = case stepKind s of
+          Resolve r ->
+            let k = sel >>= \x -> pickClauseIn db x used r
+            in s { stepClause = k, stepChild = goNode <$> stepChild s } : goSteps (maybe used (: used) k) ss
+          _ -> s { stepChild = goNode <$> stepChild s } : goSteps used ss
 
 --------------------------------------------------------------------------------
 -- Answers

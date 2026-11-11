@@ -62,7 +62,7 @@ A node whose goal is not `true` must end in one of the steps that continue the t
 
 ### Rules and unifiers
 
-- The rule is the clause of the program with its variables renamed to fresh ones. It must not use a variable that already occurs earlier on the path (the query, earlier rules, the goal). Anonymous variables are not allowed anywhere (`_` cannot be bound by a substitution): rename them, for instance `_1`.
+- The rule is the clause of the program with its variables renamed to fresh ones. It must not use a variable that already occurs earlier on the path (the query, earlier rules, the goal). Anonymous variables are not allowed by default (`_` cannot be bound by a substitution): rename them, for instance `_1`. With `--allow-anonymous` each `_` is a variable of its own, a substitution need not mention it, and in a goal it stands for whatever the resolvent has there.
 - The unifier is a most general unifier of the selected literal and the head of the rule. Any most general unifier is accepted, whichever way variables are bound to each other. It binds only variables of those two terms.
 - The goal below the step is the body of the rule followed by the rest of the goal, with the unifier applied.
 - A step for a program predicate is chosen by the leftmost selection rule. Alternatives are listed in program order: the clause number `k` in `pruned p/n #k` counts the clauses of `p/n`, from 1.

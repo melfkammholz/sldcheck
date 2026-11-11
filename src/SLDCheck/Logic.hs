@@ -9,7 +9,7 @@ module SLDCheck.Logic
   , Program
     -- * Terms
   , toCore, fromCore, showT, showSub
-  , termVars, renameVars, applySub, freshenAnonymous
+  , termVars, renameVars, applySub, freshenAnonymous, freshenAnonymousAt, isAnonName
   , goalLits, goalFromLits, splitClause, predicateOf, callable
     -- * Programs
   , Clause(..), Indicator, indexProgram
@@ -60,13 +60,22 @@ showT = show . fromCore . renameVars hide
   where hide v | "_anon#" `isPrefixOf` v = "_"
                | otherwise               = v
 
+-- | Is this the name 'freshenAnonymous' gave to an anonymous variable?
+isAnonName :: String -> Bool
+isAnonName = isPrefixOf "_anon#"
+
 -- | Make every anonymous variable @_@ a variable of its own, as in Prolog
 --   (@p(_, _)@ has two different variables).  Used for the clauses of a
 --   program; the names contain @#@, so they cannot clash with source names.
 freshenAnonymous :: Term -> Term
-freshenAnonymous = snd . go (0 :: Int)
+freshenAnonymous = freshenAnonymousAt ""
+
+-- | 'freshenAnonymous' with a tag in the names, so that the anonymous
+--   variables of different places in a tree cannot be confused.
+freshenAnonymousAt :: String -> Term -> Term
+freshenAnonymousAt tag = snd . go (0 :: Int)
   where
-    go n (Var "_")       = (n + 1, Var ("_anon#" ++ show n))
+    go n (Var "_")       = (n + 1, Var ("_anon#" ++ tag ++ show n))
     go n (Compound f as) = Compound f <$> mapAccumL go n as
     go n (List xs tl)    =
       let (n1, xs') = mapAccumL go n xs
